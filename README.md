@@ -41,10 +41,15 @@
 
 ### 冻结 / 重放 / 换载荷拒绝
 
-提交按 `(auditId, SHA-256(canonical payload))` 冻结裁决：
+提交按 `(auditId, SHA-256(canonical payload))` 冻结裁决。载荷规范化只忽略
+**不改变语义**的书写差异——常量录入顺序、函数声明键顺序、步骤字段书写顺序、
+项表达式中的空白；**步骤轨迹的顺序是语义的一部分**，`push`/`pop`/`eq`/`neq`/
+`claim` 的任意相对位置变化都构成不同载荷，作用域标签文字、函数元数、项内容
+与任一步骤内容亦然：
 
 - 同标识**同载荷**重传 → 回放同一份冻结结果（`replayed: true`，`frozenAt` 不变）；
-- 同标识**改换载荷** → HTTP 409 `PAYLOAD_CHANGED`，两个哈希同时返回，旧证据不被覆盖；
+- 同标识**改换载荷**（含步骤重排）→ HTTP 409 `PAYLOAD_CHANGED`，两个哈希同时返回，
+  旧证据不被覆盖；
 - 被驳回的证明同样冻结；前端在新提交前清除页面旧证据。
 
 ## API
@@ -57,7 +62,7 @@
 
 ```bash
 npm install
-npm run test      # 后端 22 项单测（node --test，零运行时依赖）
+npm run test      # 后端 28 项单测（node --test，零运行时依赖）
 npm run build     # React + Vite 构建到 web/dist，由 Node 服务托管
 npm start --workspace=server   # 或 PORT=9090 node server/src/server.js
 ```
@@ -86,7 +91,7 @@ docker compose run --rm verify   # 或 up 时 verify 自动跑一次
 server/src/engine.js   可回滚同余闭包（快照 union-find + 同余分组不动点 + 依据链）
 server/src/store.js    会话冻结、负载哈希、重放/换载荷拒绝、错误定位
 server/src/server.js   零依赖 HTTP API + 健康检查 + 托管 web/dist
-server/test/           22 项单测
+server/test/           28 项单测
 web/                   React + Vite 页面（轨迹、当前裁决、失败位置、依据展开）
 scripts/smoke.js       HTTP 冒烟（verify 容器内运行）
 docker-compose.yml     app + 一次性 verify

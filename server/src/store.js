@@ -1,22 +1,55 @@
 'use strict';
 
 const crypto = require('crypto');
-const { createEngine, ProofError } = require('./engine');
+const { createEngine, ProofError, parseTermString } = require('./engine');
 
 const MAX_STEPS = 180;
 const AUDIT_ID_RE = /^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$/;
 
-function normalizeForHash(value) {
+// Render a term expression in a whitespace-free canonical form, so that
+// semantically neutral whitespace differences ("f(a, b)" vs " f( a ,b )")
+// hash identically.  Unparseable terms are kept verbatim: the engine rejects
+// them anyway, and a raw invalid string can never collide with the canonical
+// rendering of a valid one (canonical renderings always re-parse).
+function canonicalTerm(value) {
+  if (typeof value !== 'string') return value;
+  let term;
+  try {
+    term = parseTermString(value);
+  } catch {
+    return value;
+  }
+  const render = (t) => (t.kind === 'const' ? t.name : `${t.fn}(${t.args.map(render).join(',')})`);
+  return render(term);
+}
+
+// Canonical form for the payload hash:
+//   * the step trace keeps its order — push/pop/eq/neq/claim execute
+//     sequentially, so any reordering is a DIFFERENT payload and must be
+//     rejected against the frozen record, not replayed;
+//   * only the finite constant list is order-insensitive (a set of names);
+//   * object keys are sorted (function-declaration key order and step-field
+//     write order are not semantically meaningful);
+//   * step left/right terms are canonicalized (whitespace-insensitive);
+//   * scope label text, function arities and term contents stay verbatim —
+//     changing any of them must hash differently.
+function normalizeForHash(value, key) {
   if (Array.isArray(value)) {
-    const entries = value.map((entry) => normalizeForHash(entry));
-    return entries.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+    const entries = value.map((entry) => normalizeForHash(entry, null));
+    if (key === 'constants') {
+      return entries.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+    }
+    return entries;
   }
   if (value && typeof value === 'object') {
     const normalized = {};
-    for (const key of Object.keys(value).sort()) {
-      normalized[key] = normalizeForHash(value[key]);
+    for (const k of Object.keys(value).sort()) {
+      normalized[k] = normalizeForHash(value[k], k);
     }
     return normalized;
+  }
+  if (key === 'left' || key === 'right') {
+    return canonicalTerm(value);
   }
   return value;
 }

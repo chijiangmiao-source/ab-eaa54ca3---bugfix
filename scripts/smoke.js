@@ -8,6 +8,13 @@
 //   3. identical replay is frozen (replayed=true)
 //   4. same id with changed payload is rejected (409 PAYLOAD_CHANGED)
 //   5. a stale-scope claim fails at the located step
+//   6. a same-level conflict is rejected at the located step
+//   7. the frozen record is readable back
+//   8. reordering steps after a pass conflicts (409) and leaves the frozen
+//      verdict/frozenAt/trace untouched
+//   9. reordered declarations / step-field order / term whitespace replay
+//      the same frozen result
+//  10. a first failing claim is located at step 0
 // Exits non-zero on the first unmet expectation.
 
 const BASE = process.env.BASE_URL || 'http://localhost:8080';
@@ -137,6 +144,70 @@ async function waitForHealthy(retries = 30) {
   console.log('7) 读取冻结记录');
   const r7 = await request('GET', `/api/audits/${valid.auditId}`);
   check('GET 回放记录 200', r7.status === 200 && r7.body.auditId === valid.auditId);
+
+  console.log('8) 先通过后交换“声称/声明”次序 -> 409 且原记录不变');
+  const ordered = {
+    auditId: 'SMOKE-ORDER-1',
+    constants: ['a', 'b'],
+    functions: { f: 1 },
+    steps: [
+      { op: 'eq', left: 'a', right: 'b' },
+      { op: 'claim', left: 'f(a)', right: 'f(b)' },
+    ],
+  };
+  const r8a = await request('POST', '/api/audits', ordered);
+  check('首次提交冻结为通过', r8a.status === 200 && r8a.body.verdict === 'equal', r8a.body.verdict);
+  const swapped = JSON.parse(JSON.stringify(ordered));
+  swapped.steps = [swapped.steps[1], swapped.steps[0]]; // 仅交换步骤次序
+  const r8b = await request('POST', '/api/audits', swapped);
+  check('重排步骤得到 409 而非旧裁决', r8b.status === 409 && r8b.body.error === 'PAYLOAD_CHANGED', {
+    status: r8b.status,
+    body: r8b.body,
+  });
+  const r8c = await request('GET', `/api/audits/${ordered.auditId}`);
+  check(
+    '原标识结论/冻结时间/轨迹未变',
+    r8c.status === 200 &&
+      r8c.body.verdict === 'equal' &&
+      r8c.body.frozenAt === r8a.body.frozenAt &&
+      r8c.body.trace.map((s) => s.op).join(',') === 'eq,claim' &&
+      r8c.body.steps.map((s) => s.op).join(',') === 'eq,claim',
+    { verdict: r8c.body.verdict, frozenAt: r8c.body.frozenAt }
+  );
+
+  console.log('9) 声明重排与项空白差异 -> 稳定回放同一冻结结果');
+  const restyled = {
+    auditId: ordered.auditId,
+    constants: ['b', 'a'], // 常量录入顺序不同
+    functions: { f: 1 },
+    steps: [
+      { right: ' b ', left: 'a', op: 'eq' }, // 字段书写顺序 + 项空白差异
+      { op: 'claim', left: ' f(a)', right: 'f( b )' },
+    ],
+  };
+  const r9 = await request('POST', '/api/audits', restyled);
+  check(
+    '回放同一冻结结果',
+    r9.status === 200 && r9.body.replayed === true && r9.body.frozenAt === r8a.body.frozenAt && r9.body.verdict === 'equal',
+    { status: r9.status, replayed: r9.body && r9.body.replayed }
+  );
+
+  console.log('10) 首条不成立声称 -> 定位第 0 步并驳回');
+  const firstClaimFails = {
+    auditId: 'SMOKE-ORDER-2',
+    constants: ['a', 'b'],
+    functions: { f: 1 },
+    steps: [
+      { op: 'claim', left: 'f(a)', right: 'f(b)' }, // 交换次序后的轨迹：首条声称即不成立
+      { op: 'eq', left: 'a', right: 'b' },
+    ],
+  };
+  const r10 = await request('POST', '/api/audits', firstClaimFails);
+  check(
+    'CLAIM_FAILED 于第 0 步',
+    r10.status === 200 && r10.body.accepted === false && r10.body.failure.index === 0 && r10.body.failure.code === 'CLAIM_FAILED',
+    r10.body.failure
+  );
 
   if (failures) {
     console.error(`\n冒烟失败 ${failures} 项`);
