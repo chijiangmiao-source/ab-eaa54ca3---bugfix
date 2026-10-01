@@ -1,0 +1,46 @@
+# Deep-space payload interconnect — supplier proof auditor.
+#
+#   app     : Node API + built React bundle, with a container health check.
+#   verify  : one-shot job — runs unit tests, the production build and the
+#             HTTP smoke suite against `app`, then exits with its exit code.
+#
+# Host port is configurable:  HOST_PORT=9090 docker compose up --build
+services:
+  app:
+    build:
+      context: .
+    image: deepspace-proof-audit:latest
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8080
+    ports:
+      # Configurable host port; container port stays 8080.
+      - "${HOST_PORT:-8080}:8080"
+    healthcheck:
+      # node:20-slim ships neither curl nor wget — use Node itself.
+      test:
+        - "CMD"
+        - "node"
+        - "-e"
+        - "require('http').get('http://127.0.0.1:8080/healthz',(r)=>{process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  verify:
+    image: deepspace-proof-audit:latest
+    build:
+      context: .
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      BASE_URL: http://app:8080
+    # Runs exactly once and ends with the check suite's exit code.
+    command:
+      - "bash"
+      - "-lc"
+      - "npm run test && npm run build && BASE_URL=http://app:8080 node scripts/smoke.js"
+    restart: "no"

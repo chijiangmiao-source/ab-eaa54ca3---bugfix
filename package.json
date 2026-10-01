@@ -1,0 +1,19 @@
+{
+  "name": "deepspace-proof-audit",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Deep-space payload interconnect supplier-proof auditor: scoped congruence closure with rollback",
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "test": "npm run test --workspace=server",
+    "build": "npm run build --workspace=web",
+    "smoke": "bash scripts/smoke.sh",
+    "verify": "npm run test && npm run build && npm run smoke"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
